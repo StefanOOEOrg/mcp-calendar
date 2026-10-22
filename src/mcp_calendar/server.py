@@ -3,7 +3,7 @@ share links (e.g. Proton Calendar's public 'share with anyone' link)."""
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from zoneinfo import ZoneInfo
 
 from mcp.server import MCPServer
@@ -20,7 +20,8 @@ mcp = MCPServer(
         "public link), on-demand only, no background polling. Use "
         "list_calendars() to see configured calendar names, then "
         "list_events(days_ahead=N) for upcoming events across all of them "
-        "(or calendar=<name> for just one). Where create_event_invite is "
+        "(or calendar=<name> for just one); day_agenda(day) gives one day as "
+        "ready-made briefing lines. Where create_event_invite is "
         "offered, new appointments are sent as a mail invitation that the "
         "user accepts in his mailbox; there is no direct write access."
     ),
@@ -61,6 +62,59 @@ def list_events(days_ahead: int = 7, calendar: str | None = None) -> list[dict]:
             out.append({"calendar": name, **ev})
     out.sort(key=lambda e: e["start"])
     return out
+
+
+WEEKDAYS = ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"]
+BIRTHDAY_CALENDARS = ("geburtstag", "birthday")
+LAST_CALENDARS = ("tv",)          # listed after everything else (TV listings)
+
+
+def _agenda_line(ev: dict, others: list[dict], day: date) -> str:
+    start, end = datetime.fromisoformat(ev["start"]), datetime.fromisoformat(ev["end"])
+    place = f" ({ev['location']})" if ev["location"] else ""
+    if ev["all_day"]:
+        last = (end - timedelta(days=1)).date()
+        until = f" (bis {last:%d.%m.})" if last > day else ""
+        return f"• ganztägig: {ev['summary']}{place}{until} · {ev['calendar']}"
+    clash = [o["summary"] for o in others
+             if o is not ev and not o["all_day"]
+             and datetime.fromisoformat(o["start"]) < end
+             and start < datetime.fromisoformat(o["end"])]
+    warn = f" ⚠ überschneidet sich mit {', '.join(clash)}" if clash else ""
+    begin = f"{start:%H:%M}" if start.date() == day else f"{start:%d.%m. %H:%M}"
+    finish = f"{end:%H:%M}" if end.date() == day else f"{end:%d.%m. %H:%M}"
+    return f"• {begin}–{finish} {ev['summary']}{place} · {ev['calendar']}{warn}"
+
+
+@mcp.tool()
+def day_agenda(day: str | None = None) -> str:
+    """One day's events (default today) across all calendars as ready-made briefing lines:
+    all-day first, then by time with overlaps marked ⚠, birthdays as 🎂 lines, TV listings
+    last. `day` is YYYY-MM-DD. Copy the lines as they are."""
+    tz = ZoneInfo(config.timezone())
+    wanted = date.fromisoformat(day) if day else datetime.now(tz).date()
+    start = datetime.combine(wanted, time.min, tzinfo=tz)
+    if not config.calendars():
+        raise CalendarError("No calendar configured — set CALENDAR_URLS or CALENDAR_ICS_URL.")
+    events = []
+    for name, url in config.calendars().items():
+        events += [{"calendar": name, **ev}
+                   for ev in events_in_range(url, start=start, end=start + timedelta(days=1))]
+
+    def kind(ev: dict) -> int:
+        name = ev["calendar"].lower()
+        if any(word in name for word in BIRTHDAY_CALENDARS):
+            return 1
+        return 2 if any(name.startswith(word) for word in LAST_CALENDARS) else 0
+
+    regular = sorted((ev for ev in events if kind(ev) == 0),
+                     key=lambda ev: (not ev["all_day"], ev["start"]))
+    lines = [_agenda_line(ev, regular, wanted) for ev in regular]
+    lines += [f"🎂 {ev['summary']}" for ev in events if kind(ev) == 1]
+    lines += [_agenda_line(ev, [], wanted) for ev in sorted(
+        (ev for ev in events if kind(ev) == 2), key=lambda ev: ev["start"])]
+    header = f"📅 Termine {WEEKDAYS[wanted.weekday()]} {wanted:%d.%m.}"
+    return "\n".join([header, *(lines or ["Keine Termine."])])
 
 
 def create_event_invite(

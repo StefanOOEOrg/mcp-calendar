@@ -6,7 +6,7 @@ import pytest
 import respx
 
 from mcp_calendar.ics import CalendarError
-from mcp_calendar.server import list_calendars, list_events
+from mcp_calendar.server import day_agenda, list_calendars, list_events
 
 WORK_URL = "https://example.com/work.ics"
 HOME_URL = "https://example.com/home.ics"
@@ -101,3 +101,48 @@ def test_list_events_respects_days_ahead_window(two_calendars):
     # event is ~24h out, a 0-day window should not include it
     events = list_events(calendar="Work", days_ahead=0)
     assert events == []
+
+
+def _ics(*events: str) -> bytes:
+    """A calendar from VEVENT bodies (DTSTART/DTEND/SUMMARY lines)."""
+    body = "".join(f"BEGIN:VEVENT\r\nUID:{i}@test\r\nDTSTAMP:20261001T000000Z\r\n{ev}"
+                   "END:VEVENT\r\n" for i, ev in enumerate(events))
+    return ("BEGIN:VCALENDAR\r\nPRODID:-//Test//Test//EN\r\nVERSION:2.0\r\n" + body
+            + "END:VCALENDAR\r\n").encode()
+
+
+@respx.mock
+def test_day_agenda_lines(monkeypatch):
+    """All-day first, timed by start with overlaps, birthdays, TV last; other days left out."""
+    monkeypatch.setenv("CALENDAR_URLS", '{"Work": "https://example.com/w.ics", '
+                       '"Geburtstage": "https://example.com/b.ics", '
+                       '"TV Sport": "https://example.com/tv.ics"}')
+    respx.get("https://example.com/w.ics").mock(return_value=httpx.Response(200, content=_ics(
+        "DTSTART;TZID=Europe/Vienna:20261023T100000\r\nDTEND;TZID=Europe/Vienna:20261023T113000\r\n"
+        "SUMMARY:Review\r\nLOCATION:Office\r\n",
+        "DTSTART;TZID=Europe/Vienna:20261023T090000\r\nDTEND;TZID=Europe/Vienna:20261023T103000\r\n"
+        "SUMMARY:Standup\r\n",
+        "DTSTART;VALUE=DATE:20261022\r\nDTEND;VALUE=DATE:20261025\r\nSUMMARY:Messe\r\n",
+        "DTSTART;TZID=Europe/Vienna:20261024T090000\r\nDTEND;TZID=Europe/Vienna:20261024T100000\r\n"
+        "SUMMARY:Tomorrow\r\n")))
+    respx.get("https://example.com/b.ics").mock(return_value=httpx.Response(200, content=_ics(
+        "DTSTART;VALUE=DATE:20261023\r\nDTEND;VALUE=DATE:20261024\r\nSUMMARY:Anna\r\n")))
+    respx.get("https://example.com/tv.ics").mock(return_value=httpx.Response(200, content=_ics(
+        "DTSTART;TZID=Europe/Vienna:20261023T200000\r\nDTEND;TZID=Europe/Vienna:20261023T220000\r\n"
+        "SUMMARY:Hockey\r\n")))
+
+    assert day_agenda("2026-10-23").splitlines() == [
+        "📅 Termine Fr 23.10.",
+        "• ganztägig: Messe (bis 24.10.) · Work",
+        "• 09:00–10:30 Standup · Work ⚠ überschneidet sich mit Review",
+        "• 10:00–11:30 Review (Office) · Work ⚠ überschneidet sich mit Standup",
+        "🎂 Anna",
+        "• 20:00–22:00 Hockey · TV Sport",
+    ]
+
+
+@respx.mock
+def test_day_agenda_empty_day(two_calendars):
+    respx.get(WORK_URL).mock(return_value=httpx.Response(200, content=_ics()))
+    respx.get(HOME_URL).mock(return_value=httpx.Response(200, content=_ics()))
+    assert day_agenda("2026-10-23") == "📅 Termine Fr 23.10.\nKeine Termine."
