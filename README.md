@@ -32,6 +32,10 @@ the mail, default `himalaya`), `CALENDAR_MAIL_TIMEOUT` (seconds, default `60`).
 - `list_events(days_ahead=7, calendar=None)` — events from now through
   `days_ahead` days out, across all calendars (or one, via `calendar`).
   Expands recurring events (RRULE) via `recurring-ical-events`.
+- `day_agenda(day=None, language="en")` — one day (default today) as ready-made
+  briefing lines: all-day events first, then by time with overlaps marked ⚠,
+  calendars named like "Birthdays" as 🎂 lines, calendars starting with "TV" last.
+  `language` `en` or `de`.
 - `create_event_invite(title, start, duration_minutes=60, all_day=False, days=1,
   location=None, description=None)` — mails the event as one `termin.ics`
   attachment (`text/calendar; method=PUBLISH`, no organizer/attendees) to

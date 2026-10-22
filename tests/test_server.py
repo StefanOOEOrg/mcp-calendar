@@ -115,14 +115,14 @@ def _ics(*events: str) -> bytes:
 def test_day_agenda_lines(monkeypatch):
     """All-day first, timed by start with overlaps, birthdays, TV last; other days left out."""
     monkeypatch.setenv("CALENDAR_URLS", '{"Work": "https://example.com/w.ics", '
-                       '"Geburtstage": "https://example.com/b.ics", '
+                       '"Birthdays": "https://example.com/b.ics", '
                        '"TV Sport": "https://example.com/tv.ics"}')
     respx.get("https://example.com/w.ics").mock(return_value=httpx.Response(200, content=_ics(
         "DTSTART;TZID=Europe/Vienna:20261023T100000\r\nDTEND;TZID=Europe/Vienna:20261023T113000\r\n"
         "SUMMARY:Review\r\nLOCATION:Office\r\n",
         "DTSTART;TZID=Europe/Vienna:20261023T090000\r\nDTEND;TZID=Europe/Vienna:20261023T103000\r\n"
         "SUMMARY:Standup\r\n",
-        "DTSTART;VALUE=DATE:20261022\r\nDTEND;VALUE=DATE:20261025\r\nSUMMARY:Messe\r\n",
+        "DTSTART;VALUE=DATE:20261022\r\nDTEND;VALUE=DATE:20261025\r\nSUMMARY:Trade fair\r\n",
         "DTSTART;TZID=Europe/Vienna:20261024T090000\r\nDTEND;TZID=Europe/Vienna:20261024T100000\r\n"
         "SUMMARY:Tomorrow\r\n")))
     respx.get("https://example.com/b.ics").mock(return_value=httpx.Response(200, content=_ics(
@@ -131,13 +131,17 @@ def test_day_agenda_lines(monkeypatch):
         "DTSTART;TZID=Europe/Vienna:20261023T200000\r\nDTEND;TZID=Europe/Vienna:20261023T220000\r\n"
         "SUMMARY:Hockey\r\n")))
 
-    assert day_agenda("2026-10-23").splitlines() == [
+    assert day_agenda("2026-10-23", language="de").splitlines() == [
         "📅 Termine Fr 23.10.",
-        "• ganztägig: Messe (bis 24.10.) · Work",
+        "• ganztägig: Trade fair (bis 24.10.) · Work",
         "• 09:00–10:30 Standup · Work ⚠ überschneidet sich mit Review",
         "• 10:00–11:30 Review (Office) · Work ⚠ überschneidet sich mit Standup",
         "🎂 Anna",
         "• 20:00–22:00 Hockey · TV Sport",
+    ]
+    assert day_agenda("2026-10-23").splitlines()[1:3] == [
+        "• all day: Trade fair (until 24.10.) · Work",
+        "• 09:00–10:30 Standup · Work ⚠ overlaps with Review",
     ]
 
 
@@ -145,4 +149,5 @@ def test_day_agenda_lines(monkeypatch):
 def test_day_agenda_empty_day(two_calendars):
     respx.get(WORK_URL).mock(return_value=httpx.Response(200, content=_ics()))
     respx.get(HOME_URL).mock(return_value=httpx.Response(200, content=_ics()))
-    assert day_agenda("2026-10-23") == "📅 Termine Fr 23.10.\nKeine Termine."
+    assert day_agenda("2026-10-23") == "📅 Events Fri 23.10.\nNo events."
+    assert day_agenda("2026-10-23", language="de") == "📅 Termine Fr 23.10.\nKeine Termine."
