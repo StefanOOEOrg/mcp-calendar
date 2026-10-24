@@ -55,3 +55,19 @@ def himalaya() -> str:
 
 def mail_timeout() -> float:
     return float(os.environ.get("CALENDAR_MAIL_TIMEOUT", "60"))
+
+
+def proton_cal() -> str:
+    """Path to the proton-cal binary; empty means the direct write path is off."""
+    return os.getenv("CALENDAR_PROTON_CAL", "").strip()
+
+
+def proton_calendar() -> str:
+    """Optional calendar name or id for proton-cal (empty = the CLI default)."""
+    return os.getenv("CALENDAR_PROTON_CALENDAR", "").strip()
+
+
+def proton_timeout() -> float:
+    """Timeout in seconds for one proton-cal call (default 60, like mail_timeout)."""
+    return float(os.getenv("CALENDAR_PROTON_TIMEOUT", "60"))
+
