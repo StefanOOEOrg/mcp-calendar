@@ -1,12 +1,18 @@
 """Tests for the MCP tool functions (server.py)."""
+import os
 from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
 import respx
+from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_calendar.ics import CalendarError
-from mcp_calendar.server import day_agenda, list_calendars, list_events
+from mcp_calendar.server import (
+    create_event_invite,
+    day_agenda,
+    list_calendars,
+    list_events,
+)
 
 WORK_URL = "https://example.com/work.ics"
 HOME_URL = "https://example.com/home.ics"
@@ -54,7 +60,7 @@ def test_list_calendars_empty_when_unconfigured(monkeypatch):
 def test_list_events_no_calendars_raises(monkeypatch):
     monkeypatch.delenv("CALENDAR_URLS", raising=False)
     monkeypatch.delenv("CALENDAR_ICS_URL", raising=False)
-    with pytest.raises(CalendarError, match="No calendar configured"):
+    with pytest.raises(ToolError, match="No calendar configured"):
         list_events()
 
 
@@ -66,7 +72,7 @@ def test_list_events_unknown_calendar_raises(two_calendars):
     respx.get(HOME_URL).mock(
         return_value=httpx.Response(200, content=_ics_with_event_tomorrow("H"))
     )
-    with pytest.raises(CalendarError, match="Unknown calendar"):
+    with pytest.raises(ToolError, match="Unknown calendar"):
         list_events(calendar="Nonexistent")
 
 
@@ -151,3 +157,59 @@ def test_day_agenda_empty_day(two_calendars):
     respx.get(HOME_URL).mock(return_value=httpx.Response(200, content=_ics()))
     assert day_agenda("2026-10-23") == "📅 Events Fri 23.10.\nNo events."
     assert day_agenda("2026-10-23", language="de") == "📅 Termine Fr 23.10.\nKeine Termine."
+
+
+# --- Fehlerpfade (Issue #1, WP1) -------------------------------------------
+# Jeder Fachfehler muss als ToolError beim Client ankommen; eine rohe
+# CalendarError/ValueError/ZoneInfoNotFoundError wird vom SDK zu
+# "Error executing tool <name>" ohne Ursache.
+
+
+def test_broken_config_raises_tool_error(monkeypatch):
+    monkeypatch.setenv("CALENDAR_URLS", "{not json")
+    with pytest.raises(ToolError, match="not valid JSON"):
+        list_calendars()
+    with pytest.raises(ToolError, match="not valid JSON"):
+        list_events()
+
+
+def test_unknown_timezone_raises_tool_error(two_calendars, monkeypatch):
+    monkeypatch.setenv("CALENDAR_TIMEZONE", "Atlantis/City")
+    with pytest.raises(ToolError, match="Unknown timezone 'Atlantis/City'"):
+        list_events()
+    with pytest.raises(ToolError, match="CALENDAR_TIMEZONE"):
+        day_agenda("2026-10-23")
+
+
+def test_invalid_day_raises_tool_error(two_calendars):
+    with pytest.raises(ToolError, match="day must be YYYY-MM-DD"):
+        day_agenda("2026-13-45")
+    with pytest.raises(ToolError, match="day must be YYYY-MM-DD"):
+        day_agenda("morgen")
+
+
+@respx.mock
+def test_fetch_error_raises_tool_error(two_calendars):
+    respx.get(WORK_URL).mock(return_value=httpx.Response(500))
+    respx.get(HOME_URL).mock(return_value=httpx.Response(500))
+    with pytest.raises(ToolError, match="Failed to fetch calendar"):
+        list_events()
+
+
+def test_invite_title_with_line_break_raises_tool_error(monkeypatch):
+    monkeypatch.setenv("CALENDAR_INVITE_TO", "me@example.com")
+    monkeypatch.setenv("CALENDAR_HIMALAYA", "/bin/true")
+    with pytest.raises(ToolError, match="title must not contain line breaks"):
+        create_event_invite("Zeile1\nZeile2", "2026-10-17T14:00")
+
+
+def test_invite_mail_failure_raises_tool_error(monkeypatch):
+    monkeypatch.setenv("CALENDAR_INVITE_TO", "me@example.com")
+    monkeypatch.setenv("CALENDAR_HIMALAYA", "/bin/false")
+    with pytest.raises(ToolError, match="himalaya failed"):
+        create_event_invite("Zahnarzt", "2026-10-17T14:00")
+
+
+def test_ambient_calendar_env_is_ignored():
+    """Die conftest-Fixture pinnt die Zeitzone — sonst hängt die Suite am Rechner."""
+    assert os.environ.get("CALENDAR_TIMEZONE") == "Europe/Vienna"

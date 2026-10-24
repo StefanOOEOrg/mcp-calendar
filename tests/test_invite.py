@@ -74,6 +74,9 @@ def test_tool_only_offered_with_recipient(monkeypatch):
         return {t.name for t in await server.mcp.list_tools()}
     import asyncio
     monkeypatch.delenv("CALENDAR_INVITE_TO", raising=False)
+    # Import-Zeitpunkt != Testzeitpunkt: ohne Reload kann das Tool aus einer
+    # früheren Registrierung (gesetzte Umgebung des Rechners) noch drin sein.
+    importlib.reload(server)
     assert "create_event_invite" not in asyncio.run(names())
     monkeypatch.setenv("CALENDAR_INVITE_TO", "max@example.com")
     importlib.reload(server)
