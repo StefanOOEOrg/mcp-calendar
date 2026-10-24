@@ -25,9 +25,11 @@ mcp = MCPServer(
         "list_calendars() to see configured calendar names, then "
         "list_events(days_ahead=N) for upcoming events across all of them "
         "(or calendar=<name> for just one); day_agenda(day) gives one day as "
-        "ready-made briefing lines. Where create_event_invite is "
-        "offered, new appointments are sent as a mail invitation that the "
-        "user accepts in his mailbox; there is no direct write access."
+        "ready-made briefing lines. Where create_event is offered, an "
+        "appointment is written straight into the calendar; where only "
+        "create_event_invite is offered, it is mailed as an invitation that "
+        "the user accepts in his mailbox. Prefer create_event when both are "
+        "available."
     ),
 )
 
@@ -186,6 +188,31 @@ def create_event_invite(
 # Offered only where a recipient is configured (CALENDAR_INVITE_TO).
 if config.invite_to():
     mcp.tool()(create_event_invite)
+
+
+def create_event(
+    title: str,
+    start: str,
+    duration_minutes: int = 60,
+    all_day: bool = False,
+    days: int = 1,
+    location: str | None = None,
+    description: str | None = None,
+    remind_minutes: int | None = None,
+    calendar: str | None = None,
+) -> dict:
+    """Add an event directly to the user's Proton calendar (no mail round-trip).
+    Only when they explicitly ask for an appointment to be created. `start` is local
+    time in ISO 8601, e.g. '2026-10-17T14:00' (or '2026-10-17' with all_day=True;
+    `days` = number of days of an all-day event). `remind_minutes` sets one reminder
+    before the start, `calendar` picks a specific calendar (default: the CLI's own).
+    Afterwards tell them the event is in the calendar."""
+    raise NotImplementedError
+
+
+# Offered only where the proton-cal binary is configured (CALENDAR_PROTON_CAL).
+if config.proton_cal():
+    mcp.tool()(create_event)
 
 
 def main() -> None:
