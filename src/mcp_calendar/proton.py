@@ -17,6 +17,32 @@ with ``Error: not logged in`` and exit 1, before it even validates arguments.
 
 from __future__ import annotations
 
+import json
+import subprocess
+from datetime import timedelta
+from zoneinfo import ZoneInfo
+
+from . import config
+from .ics import CalendarError
+from .invite import parse_start
+
+
+def _cli_window(
+    start: str, all_day: bool, duration_minutes: int, days: int
+) -> tuple[str, str]:
+    """The ``--start``/``--end`` strings of the CLI for one event.
+
+    All-day events use bare dates and an **inclusive** end, so ``days=3``
+    starting 2026-12-28 ends 2026-12-30.
+    """
+    tz = ZoneInfo(config.timezone())
+    begin = parse_start(start, all_day, tz)
+    if all_day:
+        end = begin + timedelta(days=days - 1)
+        return begin.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    end = begin + timedelta(minutes=duration_minutes)
+    return begin.strftime("%Y-%m-%d %H:%M"), end.strftime("%Y-%m-%d %H:%M")
+
 
 def build_command(
     title: str,
@@ -50,7 +76,34 @@ def build_command(
         CalendarError: an empty title ("title must not be empty") or an
             unparsable start (the message of ``parse_start``).
     """
-    raise NotImplementedError
+    if not title.strip():
+        raise CalendarError("title must not be empty")
+    begin, end = _cli_window(start, all_day, duration_minutes, days)
+    cmd = [
+        config.proton_cal(),
+        "create",
+        "event",
+        title.strip(),
+        "--start",
+        begin,
+        "--end",
+        end,
+        "--tz",
+        config.timezone(),
+        "-o",
+        "json",
+    ]
+    if all_day:
+        cmd.append("--all-day")
+    if calendar:
+        cmd += ["--calendar", calendar]
+    if location:
+        cmd += ["--location", location]
+    if description:
+        cmd += ["--description", description]
+    if remind_minutes is not None:
+        cmd += ["--reminder", f"{remind_minutes}m"]
+    return cmd
 
 
 def create_event(
@@ -84,4 +137,47 @@ def create_event(
             plus the two validation errors from :func:`build_command`, which must
             fire **before** the process is started.
     """
-    raise NotImplementedError
+    cmd = build_command(
+        title,
+        start,
+        duration_minutes=duration_minutes,
+        all_day=all_day,
+        days=days,
+        location=location,
+        description=description,
+        remind_minutes=remind_minutes,
+        calendar=calendar,
+    )
+    begin, end = _cli_window(start, all_day, duration_minutes, days)
+    try:
+        done = subprocess.run(
+            cmd, capture_output=True, timeout=config.proton_timeout(), check=False
+        )
+    except subprocess.TimeoutExpired:
+        raise CalendarError(
+            f"proton-cal timed out after {config.proton_timeout():g}s"
+        ) from None
+    except OSError:
+        raise CalendarError(
+            f"proton-cal not found at {config.proton_cal()} "
+            "— set CALENDAR_PROTON_CAL"
+        ) from None
+    if done.returncode != 0:
+        raise CalendarError(
+            f"proton-cal failed ({done.returncode}): "
+            + done.stderr.decode(errors="replace")[:300]
+        )
+    stdout = done.stdout.decode(errors="replace")
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError:
+        parsed = {"raw": stdout.strip()}
+    return {
+        "ok": True,
+        "title": title.strip(),
+        "start": begin,
+        "end": end,
+        "timezone": config.timezone(),
+        "calendar": calendar,
+        "result": parsed,
+    }
