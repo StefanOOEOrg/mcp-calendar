@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import config
+from . import config, proton
 from .ics import CalendarError, events_in_range
 from .invite import create_invite
 
@@ -207,7 +207,15 @@ def create_event(
     `days` = number of days of an all-day event). `remind_minutes` sets one reminder
     before the start, `calendar` picks a specific calendar (default: the CLI's own).
     Afterwards tell them the event is in the calendar."""
-    raise NotImplementedError
+    with tool_errors():
+        for name, value in (("title", title), ("location", location),
+                            ("description", description)):
+            if value and ("\n" in value or "\r" in value):
+                raise ToolError(f"{name} must not contain line breaks")
+        return proton.create_event(
+            title, start, duration_minutes=duration_minutes, all_day=all_day,
+            days=days, location=location, description=description,
+            remind_minutes=remind_minutes, calendar=calendar)
 
 
 # Offered only where the proton-cal binary is configured (CALENDAR_PROTON_CAL).
