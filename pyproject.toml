@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-calendar"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP server for read-only, on-demand queries against an ICS calendar share link (e.g. Proton Calendar's public link)"
 readme = "README.md"
 requires-python = ">=3.10"
