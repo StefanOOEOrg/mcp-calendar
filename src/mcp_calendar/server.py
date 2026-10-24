@@ -3,11 +3,14 @@ share links (e.g. Proton Calendar's public 'share with anyone' link)."""
 
 from __future__ import annotations
 
+import sys
+from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from typing import Literal
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
 from . import config
 from .ics import CalendarError, events_in_range
@@ -29,11 +32,29 @@ mcp = MCPServer(
 )
 
 
+@contextmanager
+def tool_errors():
+    """Fachfehler als ToolError weiterreichen, damit der Client die Ursache sieht."""
+    try:
+        yield
+    except CalendarError as exc:
+        raise ToolError(str(exc)) from None
+    except ZoneInfoNotFoundError as exc:
+        # ZoneInfoNotFoundError.args[0] is a full sentence ("No time zone found with
+        # key X"), not the bare key the caller asked for.
+        message = exc.args[0] if exc.args else ""
+        key = message.removeprefix("No time zone found with key ")
+        raise ToolError(f"Unknown timezone {key!r} — check CALENDAR_TIMEZONE") from None
+    except ValueError as exc:
+        raise ToolError(str(exc)) from None
+
+
 @mcp.tool()
 def list_calendars() -> list[str]:
     """List the names of configured calendars (pass one as `calendar` to
     list_events to filter to just that calendar)."""
-    return sorted(config.calendars().keys())
+    with tool_errors():
+        return sorted(config.calendars().keys())
 
 
 @mcp.tool()
@@ -42,27 +63,28 @@ def list_events(days_ahead: int = 7, calendar: str | None = None) -> list[dict]:
     across all configured calendars unless `calendar` names one specific
     calendar (see list_calendars()). Each event has: calendar, summary,
     start, end (ISO 8601, local time), all_day, location, description."""
-    cals = config.calendars()
-    if not cals:
-        raise CalendarError(
-            "No calendar configured — set CALENDAR_URLS or CALENDAR_ICS_URL."
-        )
-    if calendar is not None and calendar not in cals:
-        raise CalendarError(
-            f"Unknown calendar {calendar!r}. Known: {sorted(cals)}"
-        )
-    targets = {calendar: cals[calendar]} if calendar else cals
+    with tool_errors():
+        cals = config.calendars()
+        if not cals:
+            raise CalendarError(
+                "No calendar configured — set CALENDAR_URLS or CALENDAR_ICS_URL."
+            )
+        if calendar is not None and calendar not in cals:
+            raise CalendarError(
+                f"Unknown calendar {calendar!r}. Known: {sorted(cals)}"
+            )
+        targets = {calendar: cals[calendar]} if calendar else cals
 
-    tz = ZoneInfo(config.timezone())
-    start = datetime.now(tz)
-    end = start + timedelta(days=days_ahead)
+        tz = ZoneInfo(config.timezone())
+        start = datetime.now(tz)
+        end = start + timedelta(days=days_ahead)
 
-    out: list[dict] = []
-    for name, url in targets.items():
-        for ev in events_in_range(url, start=start, end=end):
-            out.append({"calendar": name, **ev})
-    out.sort(key=lambda e: e["start"])
-    return out
+        out: list[dict] = []
+        for name, url in targets.items():
+            for ev in events_in_range(url, start=start, end=end):
+                out.append({"calendar": name, **ev})
+        out.sort(key=lambda e: e["start"])
+        return out
 
 
 TEXTS = {
@@ -99,31 +121,41 @@ def day_agenda(day: str | None = None, language: Literal["en", "de"] = "en") -> 
     """One day's events (default today) across all calendars as ready-made briefing lines:
     all-day first, then by time with overlaps marked ⚠, birthdays as 🎂 lines, TV listings
     last. `day` is YYYY-MM-DD, `language` en or de. Copy the lines as they are."""
-    text = TEXTS[language]
-    tz = ZoneInfo(config.timezone())
-    wanted = date.fromisoformat(day) if day else datetime.now(tz).date()
-    start = datetime.combine(wanted, time.min, tzinfo=tz)
-    if not config.calendars():
-        raise CalendarError("No calendar configured — set CALENDAR_URLS or CALENDAR_ICS_URL.")
-    events = []
-    for name, url in config.calendars().items():
-        events += [{"calendar": name, **ev}
-                   for ev in events_in_range(url, start=start, end=start + timedelta(days=1))]
+    with tool_errors():
+        text = TEXTS[language]
+        tz = ZoneInfo(config.timezone())
+        if day is not None:
+            try:
+                wanted = date.fromisoformat(day)
+            except ValueError:
+                raise ToolError(f"day must be YYYY-MM-DD, got {day!r}") from None
+        else:
+            wanted = datetime.now(tz).date()
+        start = datetime.combine(wanted, time.min, tzinfo=tz)
+        if not config.calendars():
+            raise CalendarError(
+                "No calendar configured — set CALENDAR_URLS or CALENDAR_ICS_URL."
+            )
+        events = []
+        for name, url in config.calendars().items():
+            events += [{"calendar": name, **ev}
+                       for ev in events_in_range(url, start=start,
+                                                 end=start + timedelta(days=1))]
 
-    def kind(ev: dict) -> int:
-        name = ev["calendar"].lower()
-        if any(word in name for word in BIRTHDAY_CALENDARS):
-            return 1
-        return 2 if any(name.startswith(word) for word in LAST_CALENDARS) else 0
+        def kind(ev: dict) -> int:
+            name = ev["calendar"].lower()
+            if any(word in name for word in BIRTHDAY_CALENDARS):
+                return 1
+            return 2 if any(name.startswith(word) for word in LAST_CALENDARS) else 0
 
-    regular = sorted((ev for ev in events if kind(ev) == 0),
-                     key=lambda ev: (not ev["all_day"], ev["start"]))
-    lines = [_agenda_line(ev, regular, wanted, text) for ev in regular]
-    lines += [f"🎂 {ev['summary']}" for ev in events if kind(ev) == 1]
-    lines += [_agenda_line(ev, [], wanted, text) for ev in sorted(
-        (ev for ev in events if kind(ev) == 2), key=lambda ev: ev["start"])]
-    header = f"📅 {text['events']} {text['weekdays'][wanted.weekday()]} {wanted:%d.%m.}"
-    return "\n".join([header, *(lines or [text["none"]])])
+        regular = sorted((ev for ev in events if kind(ev) == 0),
+                         key=lambda ev: (not ev["all_day"], ev["start"]))
+        lines = [_agenda_line(ev, regular, wanted, text) for ev in regular]
+        lines += [f"🎂 {ev['summary']}" for ev in events if kind(ev) == 1]
+        lines += [_agenda_line(ev, [], wanted, text) for ev in sorted(
+            (ev for ev in events if kind(ev) == 2), key=lambda ev: ev["start"])]
+        header = f"📅 {text['events']} {text['weekdays'][wanted.weekday()]} {wanted:%d.%m.}"
+        return "\n".join([header, *(lines or [text["none"]])])
 
 
 def create_event_invite(
@@ -141,9 +173,14 @@ def create_event_invite(
     time in ISO 8601, e.g. '2026-10-17T14:00' (or '2026-10-17' with all_day=True;
     `days` = number of days of an all-day event). Afterwards tell them the invitation
     is in their mailbox and has to be accepted there."""
-    return create_invite(title, start, duration_minutes=duration_minutes,
-                         all_day=all_day, days=days, location=location,
-                         description=description)
+    with tool_errors():
+        for name, value in (("title", title), ("location", location),
+                            ("description", description)):
+            if value and ("\n" in value or "\r" in value):
+                raise ToolError(f"{name} must not contain line breaks")
+        return create_invite(title, start, duration_minutes=duration_minutes,
+                             all_day=all_day, days=days, location=location,
+                             description=description)
 
 
 # Offered only where a recipient is configured (CALENDAR_INVITE_TO).
@@ -152,6 +189,16 @@ if config.invite_to():
 
 
 def main() -> None:
+    try:
+        cals = config.calendars()
+    except ValueError as exc:
+        print(f"mcp-calendar: {exc}", file=sys.stderr)
+    else:
+        if not cals:
+            print(
+                "mcp-calendar: no calendar configured — set CALENDAR_URLS or CALENDAR_ICS_URL",
+                file=sys.stderr,
+            )
     mcp.run()
 
 
