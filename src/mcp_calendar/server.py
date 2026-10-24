@@ -12,13 +12,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from mcp.server import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 
-from . import config, proton
+from . import __version__, config, proton
 from .ics import CalendarError, events_in_range
 from .invite import create_invite
 
 mcp = MCPServer(
     "mcp-calendar",
-    version="0.1.0",
+    version=__version__,
     instructions=(
         "Calendar lookup against ICS share links (e.g. Proton Calendar's "
         "public link), on-demand only, no background polling. Use "

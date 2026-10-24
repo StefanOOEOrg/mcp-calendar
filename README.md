@@ -55,7 +55,8 @@ A broken `CALENDAR_URLS` (invalid JSON, wrong shape) is reported as
 
 ## Tools
 
-All tools are read-only except `create_event_invite`, which only sends mail.
+All tools are read-only except the two write paths: `create_event` (direct, optional) and
+`create_event_invite` (mail invitation, optional).
 
 - `list_calendars()` — the configured calendar names, sorted.
 - `list_events(days_ahead=7, calendar=None)` — events from now through `days_ahead` days out,
@@ -74,6 +75,32 @@ All tools are read-only except `create_event_invite`, which only sends mail.
   Mail shows its "Add to Proton Calendar" button for a PUBLISH — a REQUEST from your own address
   to yourself shows no such button. Afterwards the invitation sits in the mailbox and has to be
   accepted there.
+
+- `create_event(title, start, duration_minutes=60, all_day=False, days=1, location=None,
+  description=None, remind_minutes=None, calendar=None)` — writes the event **directly** into the
+  Proton calendar through the `proton-cal` CLI; no mail, no acceptance step. `remind_minutes` adds a
+  single reminder, `calendar` picks a calendar (default: the CLI's own). **Offered only when
+  `CALENDAR_PROTON_CAL` points at the binary.** Where both write paths exist, an agent should
+  prefer this one.
+
+## Creating events
+
+Proton Calendar has no CalDAV and no public API, so there are two ways to add an event, and both
+are optional:
+
+1. **Direct (`create_event`, recommended when available).** Needs the external Go binary
+   `proton-cal` binary (Go, Unlicense) in a **pinned** version (v0.1.2, SHA256 checked against the
+   release's `checksums.txt`) and a one-time interactive `proton-cal login` **on the
+   machine that runs this server** — the session and the derived key passphrase live in
+   `~/.config/proton-cal/` (mode 0600); the account password is never stored. Point
+   `CALENDAR_PROTON_CAL` at the binary. This path is unofficial: it uses Proton's private API and
+   can break with any Proton release, which is why it stays optional and pinned.
+2. **Mail invitation (`create_event_invite`, the fallback).** Needs a local `himalaya` CLI and
+   `CALENDAR_INVITE_TO`. The event arrives as a `text/calendar` attachment that Proton Mail turns
+   into an "Add to Proton Calendar" button.
+
+Neither path can **change or cancel** an existing event — `proton-cal` could, the mail cannot, and
+this server deliberately does not offer it. Recurring events can only be read.
 
 ## Project structure
 
@@ -122,8 +149,13 @@ python -m mcp_calendar
 
 - A single-user tool, not a service: it runs locally over stdio — no network port, no
   authentication, no multi-user support.
-- Read-only against the calendars: the ICS share links cannot be written; the only outbound action
-  is the invitation mail.
+- Reading goes over the read-only ICS share links; writing only through the two optional paths
+  above (direct `proton-cal` or mail invitation). Without either, the server is read-only.
+- Proton's CalDAV situation is unchanged: *"Proton Calendar doesn't support CalDAV, so you can't
+  set up a direct two-way sync with an external calendar. The only option right now is to subscribe
+  to a calendar via a shared link, which gives you read-only access."* — the "right now" is the
+  reason the ICS path stays: if CalDAV ever arrives, a standard client replaces the CLI.
+- Changing or cancelling an event is not supported by either write path.
 - Invitations need a local `himalaya` CLI that can send mail non-interactively; without it the
   other three tools still work.
 - No background polling and no cache: every call fetches the feeds fresh, so a slow or unreachable
