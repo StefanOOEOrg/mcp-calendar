@@ -1,5 +1,7 @@
 # mcp-calendar
 
+[![CI](https://github.com/StefanOOEOrg/mcp-calendar/actions/workflows/ci.yml/badge.svg)](https://github.com/StefanOOEOrg/mcp-calendar/actions/workflows/ci.yml)
+
 MCP server for on-demand queries against one or more ICS calendar share links
 (e.g. Proton Calendar's public "share with anyone" link), plus optional
 **invitations by mail** to add appointments.
@@ -7,44 +9,129 @@ MCP server for on-demand queries against one or more ICS calendar share links
 No direct write access (the share links are read-only), no background
 polling — every call fetches fresh.
 
+## Requirements
+
+- **Python 3.10 or newer** (the CI runs 3.10 and 3.14).
+- Network access to the ICS share links.
+- Only for invitations: the [`himalaya`](https://github.com/pimalaya/himalaya) CLI, configured so
+  that it can send mail non-interactively.
+
+## Installation
+
+```bash
+git clone https://github.com/StefanOOEOrg/mcp-calendar.git
+cd mcp-calendar
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+cp .env.example .env        # fill in CALENDAR_URLS or CALENDAR_ICS_URL
+```
+
+Then start it over stdio (`python -m mcp_calendar`, or the `mcp-calendar` script) and point your
+MCP client at it. Nothing listens on a port; the process speaks MCP on stdin/stdout.
+
 ## Configuration
 
-`CALENDAR_URLS` — single-line JSON object mapping a friendly calendar name to
-its ICS share URL:
+All settings come from the environment; a `.env` file in the repo root works too
+(copy `.env.example`).
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `CALENDAR_URLS` | single-line JSON object `{"Name": "ICS share URL", …}` | — |
+| `CALENDAR_ICS_URL` | one ICS URL; used only when `CALENDAR_URLS` is unset, registered under the name `default` | — |
+| `CALENDAR_TIMEZONE` | IANA zone used for "now" and day boundaries | `Europe/Vienna` |
+| `CALENDAR_FETCH_TIMEOUT` | seconds per ICS fetch | `20` |
+| `CALENDAR_INVITE_TO` | recipient of invitations; **only with this set** the `create_event_invite` tool is offered | — |
+| `CALENDAR_INVITE_FROM` | sender/organizer of the invitation mail | = `CALENDAR_INVITE_TO` |
+| `CALENDAR_HIMALAYA` | path of the `himalaya` CLI that sends the mail | `himalaya` |
+| `CALENDAR_MAIL_TIMEOUT` | seconds for one mail call | `60` |
+
+`CALENDAR_URLS` example:
 
 ```
-CALENDAR_URLS={"My calendar": "https://...", "Family": "https://..."}
+CALENDAR_URLS={"My calendar": "https://calendar.proton.me/api/calendar/v1/url/…/calendar.ics", "Family": "https://…"}
 ```
 
-For a single calendar, `CALENDAR_ICS_URL` alone also works.
-
-Optional: `CALENDAR_TIMEZONE` (default `Europe/Vienna`), `CALENDAR_FETCH_TIMEOUT`
-(seconds, default `20`).
-
-Invitations (only offered when `CALENDAR_INVITE_TO` is set):
-`CALENDAR_INVITE_TO` (recipient), `CALENDAR_INVITE_FROM` (sender/organizer,
-default = recipient), `CALENDAR_HIMALAYA` (path of the `himalaya` CLI that sends
-the mail, default `himalaya`), `CALENDAR_MAIL_TIMEOUT` (seconds, default `60`).
+A broken `CALENDAR_URLS` (invalid JSON, wrong shape) is reported as
+`CALENDAR_URLS is not valid JSON: …` instead of silently yielding zero calendars.
 
 ## Tools
 
-- `list_calendars()` — configured calendar names.
-- `list_events(days_ahead=7, calendar=None)` — events from now through
-  `days_ahead` days out, across all calendars (or one, via `calendar`).
-  Expands recurring events (RRULE) via `recurring-ical-events`.
-- `day_agenda(day=None, language="en")` — one day (default today) as ready-made
-  briefing lines: all-day events first, then by time with overlaps marked ⚠,
-  calendars named like "Birthdays" as 🎂 lines, calendars starting with "TV" last.
-  `language` `en` or `de`.
-- `create_event_invite(title, start, duration_minutes=60, all_day=False, days=1,
-  location=None, description=None)` — mails the event as one `termin.ics`
-  attachment (`text/calendar; method=PUBLISH`, no organizer/attendees) to
-  `CALENDAR_INVITE_TO`; Proton Mail offers "Add to Proton Calendar" for it (a
-  REQUEST from your own address to yourself shows no such button). `start` is
-  local ISO 8601.
+All tools are read-only except `create_event_invite`, which only sends mail.
+
+- `list_calendars()` — the configured calendar names, sorted.
+- `list_events(days_ahead=7, calendar=None)` — events from now through `days_ahead` days out,
+  across all calendars or only the one named by `calendar` (see `list_calendars()`). Recurring
+  events (RRULE) are expanded via `recurring-ical-events`. Each event carries `calendar`,
+  `summary`, `start`, `end` (ISO 8601, local time), `all_day`, `location`, `description`.
+- `day_agenda(day=None, language="en")` — one day (default today, `day` as `YYYY-MM-DD`) as
+  ready-made briefing lines: all-day events first, then by time with overlaps marked ⚠, calendars
+  whose name contains "birthday" as 🎂 lines, calendars starting with "TV" last. `language` is
+  `en` or `de`. A `day` that is not `YYYY-MM-DD` is refused with a readable message.
+- `create_event_invite(title, start, duration_minutes=60, all_day=False, days=1, location=None,
+  description=None)` — mails the event as one `termin.ics` attachment to `CALENDAR_INVITE_TO`.
+  `start` is local ISO 8601 (`2026-10-17T14:00`, or `2026-10-17` with `all_day=True`); `days` is
+  the length of an all-day event. **Offered only when `CALENDAR_INVITE_TO` is set.** The
+  attachment is `text/calendar; method=PUBLISH` (no organizer, no attendees), because Proton
+  Mail shows its "Add to Proton Calendar" button for a PUBLISH — a REQUEST from your own address
+  to yourself shows no such button. Afterwards the invitation sits in the mailbox and has to be
+  accepted there.
+
+## Project structure
+
+```
+mcp-calendar/
+├── src/mcp_calendar/
+│   ├── __init__.py
+│   ├── __main__.py          # python -m mcp_calendar
+│   ├── config.py            # CALENDAR_* from the environment, read on every access
+│   ├── ics.py               # fetching and parsing the share links, RRULE expansion
+│   ├── invite.py            # iCalendar (PUBLISH) + mail via himalaya
+│   └── server.py            # the MCP tools, tool_errors(), main()
+├── tests/
+│   ├── conftest.py
+│   ├── fixtures/sample.ics
+│   ├── test_config.py       # CALENDAR_URLS parsing and defaults
+│   ├── test_ics.py          # parsing, recurrence, broken feeds
+│   ├── test_invite.py       # invitation content and the mail call
+│   ├── test_server.py       # the four tools and their error messages
+│   └── test_startup.py      # startup without configuration
+├── .github/workflows/ci.yml # pytest + ruff on 3.10 and 3.14
+├── .env.example             # copy to .env, fill in the calendar URLs
+├── LICENSE
+├── pyproject.toml
+└── README.md
+```
+
+## Development
+
+```bash
+.venv/bin/pip install -e '.[dev]'
+.venv/bin/python -m pytest -q
+.venv/bin/python -m ruff check src tests   # lint gate, must stay clean
+```
+
+The tests use recorded ICS fixtures and mock the network and the mail call — no calendar account
+and no `himalaya` needed.
 
 ## Run
 
 ```bash
 python -m mcp_calendar
 ```
+
+## Scope / Limitations
+
+- A single-user tool, not a service: it runs locally over stdio — no network port, no
+  authentication, no multi-user support.
+- Read-only against the calendars: the ICS share links cannot be written; the only outbound action
+  is the invitation mail.
+- Invitations need a local `himalaya` CLI that can send mail non-interactively; without it the
+  other three tools still work.
+- No background polling and no cache: every call fetches the feeds fresh, so a slow or unreachable
+  feed slows that call down. Keep the call rate low.
+- Recurring events are expanded by `recurring-ical-events`; exotic rules or broken feeds surface
+  as a readable tool error instead of silently dropping events.
+- Calendar data is personal: share links are secrets, keep `.env` out of the repo.
+
+## License
+
+[MIT](LICENSE) — Copyright (c) 2026 StefanOOE.
