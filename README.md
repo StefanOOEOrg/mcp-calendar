@@ -1,6 +1,7 @@
 # mcp-calendar
 
 [![CI](https://github.com/StefanOOEOrg/mcp-calendar/actions/workflows/ci.yml/badge.svg)](https://github.com/StefanOOEOrg/mcp-calendar/actions/workflows/ci.yml)
+[![M8ven Verified](https://m8ven.ai/badge/mcp/stefanooeorg-mcp-calendar-1mtuuk?variant=verified)](https://m8ven.ai/mcp/stefanooeorg-mcp-calendar-1mtuuk)
 
 MCP server for on-demand queries against one or more ICS calendar share links
 (e.g. Proton Calendar's public "share with anyone" link), plus optional
