@@ -167,4 +167,4 @@ python -m mcp_calendar
 
 ## License
 
-[MIT](LICENSE) — Copyright (c) 2026 StefanOOE.
+[MIT](LICENSE) — Copyright (c) 2026 Stefan SH.
