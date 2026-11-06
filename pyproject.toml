@@ -36,5 +36,12 @@ mcp-calendar = "mcp_calendar.server:main"
 [tool.hatch.build.targets.wheel]
 packages = ["src/mcp_calendar"]
 
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
