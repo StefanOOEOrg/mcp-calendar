@@ -33,3 +33,15 @@ jobs:
         run: python -m pytest -q
       - name: Lint
         run: python -m ruff check src tests
+
+  # Single, stable status check a branch ruleset can require: the matrix job
+  # above only ever reports "test (3.10)" / "test (3.14)".
+  ci-ok:
+    needs: [test]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless the test job succeeded
+        run: |
+          echo "test: ${{ needs.test.result }}"
+          [ "${{ needs.test.result }}" = "success" ]
